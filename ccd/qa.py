@@ -176,7 +176,7 @@ def ratio_clear(quality):
     Returns:
         integer: number of non-fill pixels implied by QA data.
     """
-    return count_clear_or_water(quality) / count_total(quality)
+    return np.float16(count_clear_or_water(quality)) / np.float16(count_total(quality))
 
 
 def ratio_snow(quality):
