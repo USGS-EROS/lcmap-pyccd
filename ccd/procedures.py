@@ -24,16 +24,29 @@ For more information please refer to the pyccd Algorithm Description Document.
 """
 import logging
 import numpy as np
+np_array = np.array
+np_sum = np.sum
 
 from ccd import qa
 from ccd.change import enough_samples, enough_time,\
     update_processing_mask, stable, determine_num_coefs, calc_residuals, \
     find_closest_doy, change_magnitude, detect_change, detect_outlier
-from ccd.models import results_to_changemodel, tmask
+from ccd.models import results_to_changemodel
 from ccd.math_utils import kelvin_to_celsius, adjusted_variogram, euclidean_norm
 
+from ccd.models.tmask import tmask
+
+#from cpython cimport bool
 
 log = logging.getLogger(__name__)
+
+ldebug                       = log.debug
+qa_enough_clear              = qa.enough_clear
+qa_enough_snow               = qa.enough_snow
+qa_snow_procedure_filter     = qa.snow_procedure_filter
+qa_insufficient_clear_filter = qa.insufficient_clear_filter
+qa_standard_procedure_filter = qa.standard_procedure_filter
+np_zeros                     = np.zeros
 
 
 def fit_procedure(quality, proc_params):
@@ -50,22 +63,22 @@ def fit_procedure(quality, proc_params):
          the curves
     """
     # TODO do this better
-    clear = proc_params.QA_CLEAR
-    water = proc_params.QA_WATER
-    fill = proc_params.QA_FILL
-    snow = proc_params.QA_SNOW
-    clear_thresh = proc_params.CLEAR_PCT_THRESHOLD
-    snow_thresh = proc_params.SNOW_PCT_THRESHOLD
+    clear        = proc_params['QA_CLEAR']
+    water        = proc_params['QA_WATER']
+    fill         = proc_params['QA_FILL']
+    snow         = proc_params['QA_SNOW']
+    clear_thresh = proc_params['CLEAR_PCT_THRESHOLD']
+    snow_thresh  = proc_params['SNOW_PCT_THRESHOLD']
 
-    if not qa.enough_clear(quality, clear, water, fill, clear_thresh):
-        if qa.enough_snow(quality, clear, water, snow, snow_thresh):
+    if not qa_enough_clear(quality, clear, water, fill, clear_thresh):
+        if qa_enough_snow(quality, clear, water, snow, snow_thresh):
             func = permanent_snow_procedure
         else:
             func = insufficient_clear_procedure
     else:
         func = standard_procedure
 
-    log.debug('Procedure selected: %s',
+    ldebug('Procedure selected: %s',
               func.__name__)
 
     return func
@@ -95,26 +108,29 @@ def permanent_snow_procedure(dates, observations, fitter_fn, quality,
         1-d ndarray: processing mask indicating which values were used
             for model fitting
     """
-    # TODO do this better
-    meow_size = proc_params.MEOW_SIZE
-    curve_qa = proc_params.CURVE_QA['PERSIST_SNOW']
-    avg_days_yr = proc_params.AVG_DAYS_YR
-    fit_max_iter = proc_params.LASSO_MAX_ITER
-    num_coef = proc_params.COEFFICIENT_MIN
+    from sklearn.linear_model import Lasso
+    lasso = Lasso(max_iter=proc_params['LASSO_MAX_ITER'])
 
-    processing_mask = qa.snow_procedure_filter(observations, quality,
+    # TODO do this better
+    meow_size    = proc_params['MEOW_SIZE']
+    curve_qa     = proc_params['CURVE_QA']['PERSIST_SNOW']
+    avg_days_yr  = proc_params['AVG_DAYS_YR']
+    fit_max_iter = proc_params['LASSO_MAX_ITER']
+    num_coef     = proc_params['COEFFICIENT_MIN']
+
+    processing_mask = qa_snow_procedure_filter(observations, quality,
                                                dates, proc_params)
 
     period = dates[processing_mask]
     spectral_obs = observations[:, processing_mask]
 
-    if np.sum(processing_mask) < meow_size:
+    if np_sum(processing_mask) < meow_size:
         return [], processing_mask
 
-    models = [fitter_fn(period, spectrum, fit_max_iter, avg_days_yr, num_coef)
+    models = [fitter_fn(period, spectrum, fit_max_iter, avg_days_yr, num_coef, lasso)
               for spectrum in spectral_obs]
 
-    magnitudes = np.zeros(shape=(observations.shape[0],))
+    magnitudes = np_zeros(shape=(observations.shape[0],))
 
     # White space is cheap, so let's use it
     result = results_to_changemodel(fitted_models=models,
@@ -122,7 +138,7 @@ def permanent_snow_procedure(dates, observations, fitter_fn, quality,
                                     end_day=dates[-1],
                                     break_day=0,
                                     magnitudes=magnitudes,
-                                    observation_count=np.sum(processing_mask),
+                                    observation_count=np_sum(processing_mask),
                                     change_probability=0,
                                     curve_qa=curve_qa)
 
@@ -153,40 +169,48 @@ def insufficient_clear_procedure(dates, observations, fitter_fn, quality,
         1-d ndarray: processing mask indicating which values were used
             for model fitting
         """
-    # TODO do this better
-    meow_size = proc_params.MEOW_SIZE,
-    curve_qa = proc_params.CURVE_QA['INSUF_CLEAR']
-    avg_days_yr = proc_params.AVG_DAYS_YR
-    fit_max_iter = proc_params.LASSO_MAX_ITER
-    num_coef = proc_params.COEFFICIENT_MIN
 
-    processing_mask = qa.insufficient_clear_filter(observations, quality,
+    from sklearn.linear_model import Lasso
+    lasso = Lasso(max_iter=proc_params['LASSO_MAX_ITER'])
+
+    # TODO do this better
+    meow_size    = proc_params['MEOW_SIZE']
+    curve_qa     = proc_params['CURVE_QA']['INSUF_CLEAR']
+    avg_days_yr  = proc_params['AVG_DAYS_YR']
+    fit_max_iter = proc_params['LASSO_MAX_ITER']
+    num_coef     = proc_params['COEFFICIENT_MIN']
+
+    processing_mask = qa_insufficient_clear_filter(observations, quality,
                                                    dates, proc_params)
 
     period = dates[processing_mask]
     spectral_obs = observations[:, processing_mask]
 
-    if np.sum(processing_mask) < meow_size:
+    if np_sum(processing_mask) < meow_size:
         return [], processing_mask
 
-    models = [fitter_fn(period, spectrum, fit_max_iter, avg_days_yr, num_coef)
+    models = [fitter_fn(period, spectrum, fit_max_iter, avg_days_yr, num_coef, lasso)
               for spectrum in spectral_obs]
 
-    magnitudes = np.zeros(shape=(observations.shape[0],))
+    magnitudes = np_zeros(shape=(observations.shape[0],))
 
     result = results_to_changemodel(fitted_models=models,
                                     start_day=dates[0],
                                     end_day=dates[-1],
                                     break_day=0,
                                     magnitudes=magnitudes,
-                                    observation_count=np.sum(processing_mask),
+                                    observation_count=np_sum(processing_mask),
                                     change_probability=0,
                                     curve_qa=curve_qa)
 
     return (result,), processing_mask
 
 
-def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
+def standard_procedure(dates,
+                       observations,
+                       fitter_fn,
+                       quality,
+                       proc_params):
     """
     Runs the core change detection algorithm.
 
@@ -221,15 +245,19 @@ def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
         1-d ndarray: processing mask indicating which values were used
             for model fitting
     """
-    # TODO do this better
-    meow_size = proc_params.MEOW_SIZE
-    peek_size = proc_params.PEEK_SIZE
-    thermal_idx = proc_params.THERMAL_IDX
-    curve_qa = proc_params.CURVE_QA
+    from sklearn.linear_model import Lasso
+    lasso = Lasso(max_iter=proc_params['LASSO_MAX_ITER'])
 
-    log.debug('Build change models - dates: %s, obs: %s, '
-              'meow_size: %s, peek_size: %s',
-              dates.shape[0], observations.shape, meow_size, peek_size)
+    # TODO do this better
+    meow_size       = proc_params['MEOW_SIZE']
+    peek_size       = proc_params['PEEK_SIZE']
+    thermal_idx     = proc_params['THERMAL_IDX']
+    curve_qa        = proc_params['CURVE_QA']
+    detection_bands = proc_params['DETECTION_BANDS']
+
+    #ldebug('Build change models - dates: %s, obs: %s, '
+    #          'meow_size: %s, peek_size: %s',
+    #          dates.shape[0], observations.shape, meow_size, peek_size)
 
     # First we need to filter the observations based on the spectra values
     # and qa information and convert kelvin to celsius.
@@ -249,12 +277,12 @@ def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
     # The masked module from numpy does not seem to really add anything of
     # benefit to what we need to do, plus scikit may still be incompatible
     # with them.
-    processing_mask = qa.standard_procedure_filter(observations, quality,
+    processing_mask = qa_standard_procedure_filter(observations, quality,
                                                    dates, proc_params)
 
-    obs_count = np.sum(processing_mask)
+    obs_count = np_sum(processing_mask)
 
-    log.debug('Processing mask initial count: %s', obs_count)
+    ldebug('Processing mask initial count: %s', obs_count)
 
     # Accumulator for models. This is a list of ChangeModel named tuples
     results = []
@@ -273,26 +301,26 @@ def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
     # Calculate the variogram/madogram that will be used in subsequent
     # processing steps. See algorithm documentation for further information.
     variogram = adjusted_variogram(dates[processing_mask],
-                                   observations[:, processing_mask])
-    log.debug('Variogram values: %s', variogram)
+                                   observations[detection_bands][:, processing_mask])
+    ldebug('Variogram values: %s', variogram)
 
     # Only build models as long as sufficient data exists.
     while model_window.stop <= dates[processing_mask].shape[0] - meow_size:
         # Step 1: Initialize
-        log.debug('Initialize for change model #: %s', len(results) + 1)
+        ldebug('Initialize for change model #: %s', len(results) + 1)
         if len(results) > 0:
             start = False
 
         # Make things a little more readable by breaking this apart
         # catch return -> break apart into components
         initialized = initialize(dates, observations, fitter_fn, model_window,
-                                 processing_mask, variogram, proc_params)
+                                 processing_mask, variogram, proc_params, lasso)
 
         model_window, init_models, processing_mask = initialized
 
         # Catch for failure
         if init_models is None:
-            log.debug('Model initialization failed')
+            ldebug('Model initialization failed')
             break
 
         # Step 2: Lookback
@@ -311,18 +339,18 @@ def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
                                  fitter_fn,
                                  processing_mask,
                                  slice(previous_end, model_window.start),
-                                 curve_qa['START'], proc_params))
+                                 curve_qa['START'], proc_params, lasso))
             start = False
 
         # Step 4: lookforward
-        log.debug('Extend change model')
+        ldebug('Extend change model')
         lf = lookforward(dates, observations, model_window, fitter_fn,
-                         processing_mask, variogram, proc_params)
+                         processing_mask, variogram, proc_params, lasso)
 
         result, processing_mask, model_window = lf
         results.append(result)
 
-        log.debug('Accumulate results, {} so far'.format(len(results)))
+        ldebug('Accumulate results, {} so far'.format(len(results)))
 
         # Step 5: Iterate
         previous_end = model_window.stop
@@ -336,15 +364,21 @@ def standard_procedure(dates, observations, fitter_fn, quality, proc_params):
         model_window = slice(previous_end, dates[processing_mask].shape[0])
         results.append(catch(dates, observations, fitter_fn,
                              processing_mask, model_window,
-                             curve_qa['END'], proc_params))
+                             curve_qa['END'], proc_params, lasso))
 
-    log.debug("change detection complete")
+    ldebug("change detection complete")
 
     return results, processing_mask
 
 
-def initialize(dates, observations, fitter_fn, model_window, processing_mask,
-               variogram, proc_params):
+def initialize(dates,
+               observations,
+               fitter_fn,
+               model_window,
+               processing_mask,
+               variogram,
+               proc_params,
+               lasso):
     """
     Determine a good starting point at which to build off of for the
     subsequent process of change detection, both forward and backward.
@@ -364,20 +398,21 @@ def initialize(dates, observations, fitter_fn, model_window, processing_mask,
         slice: model window that was deemed to be a stable start
         namedtuple: fitted regression models
     """
+
     # TODO do this better
-    meow_size = proc_params.MEOW_SIZE
-    day_delta = proc_params.DAY_DELTA
-    detection_bands = proc_params.DETECTION_BANDS
-    tmask_bands = proc_params.TMASK_BANDS
-    change_thresh = proc_params.CHANGE_THRESHOLD
-    tmask_scale = proc_params.T_CONST
-    avg_days_yr = proc_params.AVG_DAYS_YR
-    fit_max_iter = proc_params.LASSO_MAX_ITER
+    meow_size       = proc_params['MEOW_SIZE']
+    day_delta       = proc_params['DAY_DELTA']
+    detection_bands = proc_params['DETECTION_BANDS']
+    tmask_bands     = proc_params['TMASK_BANDS']
+    change_thresh   = proc_params['CHANGE_THRESHOLD']
+    tmask_scale     = proc_params['T_CONST']
+    avg_days_yr     = proc_params['AVG_DAYS_YR']
+    fit_max_iter    = proc_params['LASSO_MAX_ITER']
 
     period = dates[processing_mask]
     spectral_obs = observations[:, processing_mask]
 
-    log.debug('Initial %s', model_window)
+    ldebug('Initial %s', model_window)
     models = None
     while model_window.stop + meow_size < period.shape[0]:
         # Finding a sufficient window of time needs to run
@@ -390,18 +425,19 @@ def initialize(dates, observations, fitter_fn, model_window, processing_mask,
             continue
         # stop = find_time_index(dates, model_window, meow_size, day_delta)
         # model_window = slice(model_window.start, stop)
-        log.debug('Checking window: %s', model_window)
+        ldebug('Checking window: %s', model_window)
 
         # Count outliers in the window, if there are too many outliers then
         # try again.
-        tmask_outliers = tmask.tmask(period[model_window],
-                                     spectral_obs[:, model_window],
-                                     variogram, tmask_bands, tmask_scale,
-                                     avg_days_yr)
 
-        tmask_count = np.sum(tmask_outliers)
+        tmask_outliers = tmask(period[model_window],
+                               spectral_obs[:, model_window],
+                               variogram, tmask_bands, tmask_scale,
+                               avg_days_yr)
 
-        log.debug('Number of Tmask outliers found: %s', tmask_count)
+        tmask_count = np_sum(tmask_outliers)
+
+        ldebug('Number of Tmask outliers found: %s', tmask_count)
 
         # Subset the data to the observations that currently under scrutiny
         # and remove the outliers identified by the tmask.
@@ -410,7 +446,7 @@ def initialize(dates, observations, fitter_fn, model_window, processing_mask,
         # TODO should probably look at a different fit procedure to handle
         # the following case.
         if tmask_count == model_window.stop - model_window.start:
-            log.debug('Tmask identified all values as outliers')
+            ldebug('Tmask identified all values as outliers')
 
             model_window = slice(model_window.start, model_window.stop + 1)
             continue
@@ -420,7 +456,7 @@ def initialize(dates, observations, fitter_fn, model_window, processing_mask,
         if not enough_time(tmask_period, day_delta) or \
                 not enough_samples(tmask_period, meow_size):
 
-            log.debug('Insufficient time or observations after Tmask, '
+            ldebug('Insufficient time or observations after Tmask, '
                       'extending model window')
 
             model_window = slice(model_window.start, model_window.stop + 1)
@@ -433,37 +469,42 @@ def initialize(dates, observations, fitter_fn, model_window, processing_mask,
                                                      model_window)
 
             # The model window now actually refers to a smaller slice
-            model_window = slice(model_window.start,
-                                 model_window.stop - tmask_count)
+            model_window = slice(model_window.start, model_window.stop - tmask_count)
             # Update the subset
             period = dates[processing_mask]
             spectral_obs = observations[:, processing_mask]
 
-        log.debug('Generating models to check for stability')
-        models = [fitter_fn(period[model_window], spectrum,
-                            fit_max_iter, avg_days_yr, 4)
-                  for spectrum in spectral_obs[:, model_window]]
+        ldebug('Generating models to check for stability')
+
+        models = [fitter_fn(period[model_window], spectrum, fit_max_iter, avg_days_yr, 4, lasso) for spectrum in
+                  spectral_obs[detection_bands, model_window]]
 
         # If a model is not stable, then it is possible that a disturbance
         # exists somewhere in the observation window. The window shifts
         # forward in time, and begins initialization again.
         if not stable(models, period[model_window], variogram,
-                      change_thresh, detection_bands):
+                      change_thresh):
 
             model_window = slice(model_window.start + 1, model_window.stop + 1)
-            log.debug('Unstable model, shift window to: %s', model_window)
+            ldebug('Unstable model, shift window to: %s', model_window)
             models = None
             continue
 
         else:
-            log.debug('Stable start found: %s', model_window)
+            ldebug('Stable start found: %s', model_window)
             break
 
     return model_window, models, processing_mask
 
 
-def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
-                variogram, proc_params):
+def lookforward(dates,
+                observations,
+                model_window,
+                fitter_fn,
+                processing_mask,
+                variogram,
+                proc_params,
+                lasso):
     """Increase observation window until change is detected or
     we are out of observations.
 
@@ -486,21 +527,24 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
         slice: model window
     """
     # TODO do this better
-    peek_size = proc_params.PEEK_SIZE
-    coef_min = proc_params.COEFFICIENT_MIN
-    coef_mid = proc_params.COEFFICIENT_MID
-    coef_max = proc_params.COEFFICIENT_MAX
-    num_obs_fact = proc_params.NUM_OBS_FACTOR
-    detection_bands = proc_params.DETECTION_BANDS
-    change_thresh = proc_params.CHANGE_THRESHOLD
-    outlier_thresh = proc_params.OUTLIER_THRESHOLD
-    avg_days_yr = proc_params.AVG_DAYS_YR
-    fit_max_iter = proc_params.LASSO_MAX_ITER
+    peek_size       = proc_params['PEEK_SIZE']
+    coef_min        = proc_params['COEFFICIENT_MIN']
+    coef_mid        = proc_params['COEFFICIENT_MID']
+    coef_max        = proc_params['COEFFICIENT_MAX']
+    num_obs_fact    = proc_params['NUM_OBS_FACTOR']
+    detection_bands = proc_params['DETECTION_BANDS']
+    change_thresh   = proc_params['CHANGE_THRESHOLD']
+    outlier_thresh  = proc_params['OUTLIER_THRESHOLD']
+    avg_days_yr     = proc_params['AVG_DAYS_YR']
+    fit_max_iter    = proc_params['LASSO_MAX_ITER']
+
+    # Used for loops.
+    num_detectbands = len(detection_bands)
 
     # Step 4: lookforward.
     # The second step is to update a model until observations that do not
     # fit the model are found.
-    log.debug('lookforward initial model window: %s', model_window)
+    ldebug('lookforward initial model window: %s', model_window)
 
     # The fit_window pertains to which locations are used in the model
     # regression, while the model_window identifies the locations in which
@@ -521,6 +565,11 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
     # Used for comparison purposes
     fit_span = period[model_window.stop - 1] - period[model_window.start]
 
+    # Initial value, fringe case when it drops to this function, but there
+    # is not enough observations to continue.
+    num_coefs = determine_num_coefs(period[model_window], coef_min,
+                                    coef_mid, coef_max, num_obs_fact)
+
     # stop is always exclusive
     while model_window.stop + peek_size < period.shape[0] or models is None:
         num_coefs = determine_num_coefs(period[model_window], coef_min,
@@ -531,7 +580,7 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
         # Used for comparison against fit_span
         model_span = period[model_window.stop - 1] - period[model_window.start]
 
-        log.debug('Detecting change for %s', peek_window)
+        ldebug('Detecting change for %s', peek_window)
 
         # If we have less than 24 observations covered by the model_window
         # or it the first iteration, then we always fit a new window
@@ -540,17 +589,16 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
                 model_window.start]
 
             fit_window = model_window
-            log.debug('Retrain models, less than 24 samples')
+            ldebug('Retrain models, less than 24 samples')
             models = [fitter_fn(period[fit_window], spectrum,
-                                fit_max_iter, avg_days_yr, num_coefs)
-                      for spectrum in spectral_obs[:, fit_window]]
+                                fit_max_iter, avg_days_yr, num_coefs, lasso)
+                      for spectrum in spectral_obs[detection_bands, fit_window]]
 
-            residuals = np.array([calc_residuals(period[peek_window],
-                                                 spectral_obs[idx, peek_window],
-                                                 models[idx], avg_days_yr)
-                                  for idx in range(observations.shape[0])])
+            residuals = np_array([calc_residuals(period[peek_window],
+                                                 spectral_obs[idx, peek_window], models[idx], avg_days_yr)
+                                  for idx in range(num_detectbands)])
 
-            comp_rmse = [models[idx].rmse for idx in detection_bands]
+            comp_rmse = [model.rmse for model in models]
 
         # More than 24 points
         else:
@@ -558,20 +606,19 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
             # expand past a threshold, then we need to fit new ones.
             # The 1.33 should be parametrized at some point.
             if model_span >= 1.33 * fit_span:
-                log.debug('Retrain models, model_span: %s fit_span: %s',
+                ldebug('Retrain models, model_span: %s fit_span: %s',
                           model_span, fit_span)
                 fit_span = period[model_window.stop - 1] - period[
                     model_window.start]
                 fit_window = model_window
 
                 models = [fitter_fn(period[fit_window], spectrum,
-                                    fit_max_iter, avg_days_yr, num_coefs)
-                          for spectrum in spectral_obs[:, fit_window]]
+                                    fit_max_iter, avg_days_yr, num_coefs, lasso)
+                          for spectrum in spectral_obs[detection_bands, fit_window]]
 
-            residuals = np.array([calc_residuals(period[peek_window],
-                                                 spectral_obs[idx, peek_window],
-                                                 models[idx], avg_days_yr)
-                                  for idx in range(observations.shape[0])])
+            residuals = np_array([calc_residuals(period[peek_window],
+                                                 spectral_obs[idx, peek_window],models[idx], avg_days_yr)
+                                  for idx in range(num_detectbands)])
 
             # We want to use the closest residual values to the peek_window
             # values based on seasonality.
@@ -581,22 +628,20 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
             # Calculate an RMSE for the seasonal residual values, using 8
             # as the degrees of freedom.
             comp_rmse = [euclidean_norm(models[idx].residual[closest_indexes]) / 4
-                         for idx in detection_bands]
+                         for idx in range(num_detectbands)]
 
         # Calculate the change magnitude values for each observation in the
         # peek_window.
-        magnitude = change_magnitude(residuals[detection_bands, :],
-                                     variogram[detection_bands],
-                                     comp_rmse)
+        magnitude = change_magnitude(residuals, variogram, comp_rmse)
 
         if detect_change(magnitude, change_thresh):
-            log.debug('Change detected at: %s', peek_window.start)
+            ldebug('Change detected at: %s', peek_window.start)
 
             # Change was detected, return to parent method
             change = 1
             break
         elif detect_outlier(magnitude[0], outlier_thresh):
-            log.debug('Outlier detected at: %s', peek_window.start)
+            ldebug('Outlier detected at: %s', peek_window.start)
 
             # Keep track of any outliers so they will be excluded from future
             # processing steps
@@ -613,21 +658,39 @@ def lookforward(dates, observations, model_window, fitter_fn, processing_mask,
 
         model_window = slice(model_window.start, model_window.stop + 1)
 
+    # Exiting LookForward means that we now need to fit all the bands.
+    models = [fitter_fn(period[fit_window], spectrum,
+                        fit_max_iter, avg_days_yr, num_coefs, lasso)
+              for spectrum in spectral_obs[:, fit_window]]
+
+    residuals = np_array([calc_residuals(period[peek_window],
+                                         spectral_obs[idx, peek_window],
+                                         models[idx], avg_days_yr)
+                          for idx in range(observations.shape[0])])
+
+    model_window_start = model_window.start
+    model_window_stop  = model_window.stop
     result = results_to_changemodel(fitted_models=models,
-                                    start_day=period[model_window.start],
-                                    end_day=period[model_window.stop - 1],
+                                    start_day=period[model_window_start],
+                                    end_day=period[model_window_stop - 1],
                                     break_day=period[peek_window.start],
                                     magnitudes=np.median(residuals, axis=1),
                                     observation_count=(
-                                    model_window.stop - model_window.start),
+                                    model_window_stop - model_window_start),
                                     change_probability=change,
                                     curve_qa=num_coefs)
 
     return result, processing_mask, model_window
 
 
-def lookback(dates, observations, model_window, models, previous_break,
-             processing_mask, variogram, proc_params):
+def lookback(dates,
+             observations,
+             model_window,
+             models,
+             previous_break,
+             processing_mask,
+             variogram,
+             proc_params):
     """
     Special case when there is a gap between the start of a time series model
     and the previous model break point, this can include values that were
@@ -635,7 +698,7 @@ def lookback(dates, observations, model_window, models, previous_break,
 
     Args:
         dates: list of ordinal days
-        observations: spectral values across bands
+        observations: values across bands
         model_window: current window of values that is being considered
         models: currently fitted models for the model_window
         previous_break: index value of the previous break point, or the start
@@ -651,13 +714,17 @@ def lookback(dates, observations, model_window, models, previous_break,
         array: indices of data that have been flagged as outliers
     """
     # TODO do this better
-    peek_size = proc_params.PEEK_SIZE
-    detection_bands = proc_params.DETECTION_BANDS
-    change_thresh = proc_params.CHANGE_THRESHOLD
-    outlier_thresh = proc_params.OUTLIER_THRESHOLD
-    avg_days_yr = proc_params.AVG_DAYS_YR
+    peek_size       = proc_params['PEEK_SIZE']
+    detection_bands = proc_params['DETECTION_BANDS']
+    change_thresh   = proc_params['CHANGE_THRESHOLD']
+    outlier_thresh  = proc_params['OUTLIER_THRESHOLD']
+    avg_days_yr     = proc_params['AVG_DAYS_YR']
 
-    log.debug('Previous break: %s model window: %s', previous_break, model_window)
+    ldebug('Previous break: %s model window: %s', previous_break, model_window)
+
+    # Used for loops.
+    num_detectbands = len(detection_bands)
+
     period = dates[processing_mask]
     spectral_obs = observations[:, processing_mask]
 
@@ -669,56 +736,60 @@ def lookback(dates, observations, model_window, models, previous_break,
 
         # Important note about python slice objects, start is inclusive and
         # stop is exclusive, regardless of direction/step
-        if model_window.start - previous_break > peek_size:
-            peek_window = slice(model_window.start - 1, model_window.start - peek_size, -1)
-        elif model_window.start - peek_size <= 0:
-            peek_window = slice(model_window.start - 1, None, -1)
+        model_window_start = model_window.start
+        if model_window_start - previous_break > peek_size:
+            peek_window = slice(model_window_start - 1, model_window_start - peek_size, -1)
+        elif model_window_start - peek_size <= 0:
+            peek_window = slice(model_window_start - 1, None, -1)
         else:
-            peek_window = slice(model_window.start - 1, previous_break - 1, -1)
+            peek_window = slice(model_window_start - 1, previous_break - 1, -1)
 
-        log.debug('Considering index: %s using peek window: %s',
-                  peek_window.start, peek_window)
+        ldebug('Considering index: %s using peek window: %s', peek_window.start, peek_window)
 
-        residuals = np.array([calc_residuals(period[peek_window],
-                                             spectral_obs[idx, peek_window],
+        residuals = np_array([calc_residuals(period[peek_window],
+                                             spectral_obs[detection_bands][idx, peek_window],
                                              models[idx], avg_days_yr)
-                              for idx in range(observations.shape[0])])
+                              for idx in range(num_detectbands)])
 
-        # log.debug('Residuals for peek window: %s', residuals)
+        # ldebug('Residuals for peek window: %s', residuals)
 
-        comp_rmse = [models[idx].rmse for idx in detection_bands]
+        comp_rmse = [model.rmse for model in models]
 
-        log.debug('RMSE values for comparison: %s', comp_rmse)
+        ldebug('RMSE values for comparison: %s', comp_rmse)
 
-        magnitude = change_magnitude(residuals[detection_bands, :],
-                                     variogram[detection_bands],
-                                     comp_rmse)
+        magnitude = change_magnitude(residuals, variogram, comp_rmse)
 
+        peek_window_start = peek_window.start
         if detect_change(magnitude, change_thresh):
-            log.debug('Change detected for index: %s', peek_window.start)
+            ldebug('Change detected for index: %s', peek_window_start)
             # change was detected, return to parent method
             break
         elif detect_outlier(magnitude[0], outlier_thresh):
-            log.debug('Outlier detected for index: %s', peek_window.start)
-            processing_mask = update_processing_mask(processing_mask,
-                                                     peek_window.start)
+            ldebug('Outlier detected for index: %s', peek_window_start)
+            processing_mask = update_processing_mask(processing_mask, peek_window_start)
 
             period = dates[processing_mask]
             spectral_obs = observations[:, processing_mask]
 
             # Because this location was used in determining the model_window
             # passed in, we must now account for removing it.
-            model_window = slice(model_window.start - 1, model_window.stop - 1)
+            model_window = slice(model_window_start - 1, model_window.stop - 1)
             continue
 
-        log.debug('Including index: %s', peek_window.start)
+        ldebug('Including index: %s', peek_window.start)
         model_window = slice(peek_window.start, model_window.stop)
 
     return model_window, processing_mask
 
 
-def catch(dates, observations, fitter_fn, processing_mask, model_window,
-          curve_qa, proc_params):
+def catch(dates,
+          observations,
+          fitter_fn,
+          processing_mask,
+          model_window,
+          curve_qa,
+          proc_params,
+          lasso):
     """
     Handle special cases where general models just need to be fitted and return
     their results.
@@ -738,11 +809,11 @@ def catch(dates, observations, fitter_fn, processing_mask, model_window,
 
     """
     # TODO do this better
-    avg_days_yr = proc_params.AVG_DAYS_YR
-    fit_max_iter = proc_params.LASSO_MAX_ITER
-    num_coef = proc_params.COEFFICIENT_MIN
+    avg_days_yr  = proc_params['AVG_DAYS_YR']
+    fit_max_iter = proc_params['LASSO_MAX_ITER']
+    num_coef     = proc_params['COEFFICIENT_MIN']
 
-    log.debug('Catching observations: %s', model_window)
+    ldebug('Catching observations: %s', model_window)
     period = dates[processing_mask]
     spectral_obs = observations[:, processing_mask]
 
@@ -750,22 +821,23 @@ def catch(dates, observations, fitter_fn, processing_mask, model_window,
     model_period = period[model_window]
     model_spectral = spectral_obs[:, model_window]
 
-    models = [fitter_fn(model_period, spectrum, fit_max_iter, avg_days_yr,
-                        num_coef)
-              for spectrum in model_spectral]
+    models = [fitter_fn(model_period, spectrum, fit_max_iter, avg_days_yr, num_coef, lasso) for spectrum in model_spectral]
+
+    model_window_start = model_window.start
+    model_window_stop  = model_window.stop
 
     try:
-        break_day = period[model_window.stop]
+        break_day = period[model_window_stop]
     except:
         break_day = period[-1]
 
     result = results_to_changemodel(fitted_models=models,
-                                    start_day=period[model_window.start],
-                                    end_day=period[model_window.stop - 1],
+                                    start_day=period[model_window_start],
+                                    end_day=period[model_window_stop - 1],
                                     break_day=break_day,
-                                    magnitudes=np.zeros(shape=(7,)),
+                                    magnitudes=np_zeros(shape=(7,)),
                                     observation_count=(
-                                        model_window.stop - model_window.start),
+                                        model_window_stop - model_window_start),
                                     change_probability=0,
                                     curve_qa=curve_qa)
 

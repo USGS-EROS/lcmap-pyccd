@@ -14,8 +14,15 @@ from ccd.math_utils import sum_of_squares
 log = logging.getLogger(__name__)
 
 
-def stable(models, dates, variogram, t_cg, detection_bands):
-    """Determine if we have a stable model to start building with
+def stable(models, dates, variogram, t_cg):
+    """
+    Determine if we have a stable model to start building a time segment.
+
+    The basis of this is to ensure that the delta between the start and end of
+    the model are not too offset from each other.
+
+    Models and variogram must of be of the same shape and the representative
+    bands must be in the same order.
 
     Args:
         models: list of current representative/fitted models
@@ -23,28 +30,32 @@ def stable(models, dates, variogram, t_cg, detection_bands):
             normalization factor
         dates: array of ordinal date values
         t_cg: change threshold
-        detection_bands: index locations of the spectral bands that are used
-            to determine stability
 
     Returns:
         Boolean on whether stable or not
     """
     # This could be written differently, or more performant using numpy in the
-    # future
+    # future.
     check_vals = []
-    for idx in detection_bands:
-        rmse_norm = max(variogram[idx], models[idx].rmse)
-        slope = models[idx].fitted_model.coef_[0] * (dates[-1] - dates[0])
+    for model, vario in zip(models, variogram):
+        # Our normalization factor.
+        rmse_norm = max(vario, model.rmse)
 
-        check_val = (abs(slope) + abs(models[idx].residual[0]) +
-                     abs(models[idx].residual[-1])) / rmse_norm
+        # Look at the difference between the predicted values for the beginning
+        # and end.
+        slope_diff = model.fitted_model.coef_[0] * (dates[-1] - dates[0])
+
+        # Look at the start and end residuals, while also looking at the
+        # predicted delta.
+        check_val = (abs(slope_diff) + abs(model.residual[0]) +
+                     abs(model.residual[-1])) / rmse_norm
 
         check_vals.append(check_val)
 
-    euc_norm = sum_of_squares(np.array(check_vals))
-    log.debug('Stability norm: %s, Check against: %s', euc_norm, t_cg)
+    check = sum_of_squares(np.array(check_vals))
+    log.debug('Stability check: %s against: %s', check, t_cg)
 
-    return euc_norm < t_cg
+    return check < t_cg
 
 
 def change_magnitude(residuals, variogram, comparison_rmse):

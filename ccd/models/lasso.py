@@ -1,18 +1,9 @@
-from sklearn import linear_model
 import numpy as np
-from cachetools import LRUCache
 
 from ccd.models import FittedModel
 from ccd.math_utils import calc_rmse
 
-cache = LRUCache(maxsize=1000)
 
-
-def __coefficient_cache_key(observation_dates):
-    return tuple(observation_dates)
-
-
-# @cached(cache=cache, key=__coefficient_cache_key)
 def coefficient_matrix(dates, avg_days_yr, num_coefficients):
     """
     Fourier transform function to be used for the matrix of inputs for
@@ -26,8 +17,11 @@ def coefficient_matrix(dates, avg_days_yr, num_coefficients):
         Populated numpy array with coefficient values
     """
     w = 2 * np.pi / avg_days_yr
-
     matrix = np.zeros(shape=(len(dates), 7), order='F')
+    w12 = w * dates
+
+    cos = np.cos
+    sin = np.sin
 
     # lookup optimizations
     # Before optimization - 12.53% of total runtime
@@ -53,7 +47,8 @@ def coefficient_matrix(dates, avg_days_yr, num_coefficients):
     return matrix
 
 
-def fitted_model(dates, spectra_obs, max_iter, avg_days_yr, num_coefficients):
+def fitted_model(dates, spectra_obs, max_iter, avg_days_yr, num_coefficients, lm):
+
     """Create a fully fitted lasso model.
 
     Args:
@@ -71,9 +66,7 @@ def fitted_model(dates, spectra_obs, max_iter, avg_days_yr, num_coefficients):
         fitted_model(dates, obs).predict(...)
     """
     coef_matrix = coefficient_matrix(dates, avg_days_yr, num_coefficients)
-
-    lasso = linear_model.Lasso(max_iter=max_iter)
-    model = lasso.fit(coef_matrix, spectra_obs)
+    model = lm.fit(coef_matrix, spectra_obs)
 
     predictions = model.predict(coef_matrix)
     rmse, residuals = calc_rmse(spectra_obs, predictions)

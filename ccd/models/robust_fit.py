@@ -15,16 +15,11 @@ statsmodels and can reach ~4x faster if Numba is available to accelerate.
 # Don't alias to ``np`` until fix is implemented
 # https://github.com/numba/numba/issues/1559
 import numpy
-import sklearn
 import scipy
-
-# from yatsm.accel import try_jit
 
 EPS = numpy.finfo('float').eps
 
 
-# Weight scaling methods
-# @try_jit(nopython=True)
 def bisquare(resid, c=4.685):
     """
     Returns weighting for each residual using bisquare weight function
@@ -40,10 +35,11 @@ def bisquare(resid, c=4.685):
         http://statsmodels.sourceforge.net/stable/generated/statsmodels.robust.norms.TukeyBiweight.html
     """
     # Weight where abs(resid) < c; otherwise 0
-    return (numpy.abs(resid) < c) * (1 - (resid / c) ** 2) ** 2
+    abs_resid = numpy.abs(resid)
+
+    return (abs_resid < c) * (1 - (resid / c) ** 2) ** 2
 
 
-# @try_jit(nopython=True)
 def mad(x, c=0.6745):
     """
     Returns Median-Absolute-Deviation (MAD) of some data
@@ -61,20 +57,14 @@ def mad(x, c=0.6745):
     """
     # Return median absolute deviation adjusted sigma
     rs = numpy.sort(numpy.abs(x))
+
     return numpy.median(rs[4:]) / c
 
-#    return numpy.median(numpy.fabs(x)) / c
 
-
-# UTILITY FUNCTIONS
-# @try_jit(nopython=True)
 def _check_converge(x0, x, tol=1e-8):
     return not numpy.any(numpy.fabs(x0 - x > tol))
 
 
-# Broadcast on sw prevents nopython
-# TODO: check implementation https://github.com/numba/numba/pull/1542
-# @try_jit()
 def _weight_fit(X, y, w):
     """
     Apply a weighted OLS fit to data
@@ -101,7 +91,8 @@ def _weight_fit(X, y, w):
 
 
 # Robust regression
-class RLM(sklearn.base.BaseEstimator):
+class RLM(object):
+#cdef class RLM:
     """ Robust Linear Model using Iterative Reweighted Least Squares (RIRLS)
 
     Perform robust fitting regression via iteratively reweighted least squares
@@ -132,12 +123,9 @@ class RLM(sklearn.base.BaseEstimator):
 
     """
 
-    def __init__(self, M=bisquare, tune=4.685,
-                 scale_est=mad, scale_constant=0.6745,
+    def __init__(self, tune=4.685, scale_constant=0.6745,
                  update_scale=True, maxiter=50, tol=1e-8):
-        self.M = M
         self.tune = tune
-        self.scale_est = scale_est
         self.scale_constant = scale_constant
         self.update_scale = update_scale
         self.maxiter = maxiter
@@ -158,9 +146,8 @@ class RLM(sklearn.base.BaseEstimator):
                 chaining
 
         """
-        self.coef_, resid = _weight_fit(X, y, numpy.ones_like(y))
-        self.scale = self.scale_est(resid, c=self.scale_constant)
-
+        self.coef_, resid = _weight_fit(X, y, numpy.ones_like(y, dtype=float))
+        self.scale = mad(resid, c=self.scale_constant)
 
         Q, R = scipy.linalg.qr(X)
         E = X.dot(numpy.linalg.inv(R[0:X.shape[1],0:X.shape[1]]))
@@ -182,16 +169,18 @@ class RLM(sklearn.base.BaseEstimator):
             _coef = self.coef_.copy()
             resid = y-X.dot(_coef)
             resid = resid * adjfactor
-            # print resid
 
-            if self.update_scale:
-                self.scale = max(EPS*numpy.std(y),
-                                 self.scale_est(resid, c=self.scale_constant))
+            # always True
+            #if self.update_scale:
+            self.scale = max(EPS*numpy.std(y),
+                             mad(resid, c=self.scale_constant))
             # print self.scale
             # print iteration,numpy.sort(numpy.abs(resid)/self.scale_constant)
 
-            self.weights = self.M(resid / self.scale, c=self.tune)
+            #self.weights = self.M(resid / self.scale, c=self.tune)
+            self.weights = bisquare(resid / self.scale, c=self.tune)
             self.coef_, resid = _weight_fit(X, y, self.weights)
+
             # print 'w: ', self.weights
 
             iteration += 1
@@ -201,21 +190,19 @@ class RLM(sklearn.base.BaseEstimator):
 
     def predict(self, X):
         """ Predict yhat using model
-
         Args:
             X (np.ndarray): 2D (n_obs x n_features) design matrix
 
         Returns:
             np.ndarray: 1D yhat prediction
-
         """
         return numpy.dot(X[:,1:], self.coef_[1:]) + X[:,0]*self.coef_[0]
         # return numpy.dot(X, self.coef_) + self.intercept_
 
-    def __str__(self):
-        return (("%s:\n"
-                 " * Coefficients: %s\n"
-                 " * Intercept = %.5f\n") %
-                (self.__class__.__name__,
-                 numpy.array_str(self.coef_, precision=4),
-                 self.intercept_))
+    #def __str__(self):
+    #    return (("%s:\n"
+    #             " * Coefficients: %s\n"
+    #             " * Intercept = %.5f\n") %
+    #            (self.__class__.__name__,
+    #             numpy.array_str(self.coef_, precision=4),
+    #             self.intercept_))

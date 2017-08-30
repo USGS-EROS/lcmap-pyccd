@@ -1,6 +1,7 @@
 """Filters for pre-processing change model inputs.
 """
 import numpy as np
+np_array = np.array
 
 from ccd.math_utils import calc_median, mask_value, count_value, mask_duplicate_values
 
@@ -8,7 +9,7 @@ from ccd.math_utils import calc_median, mask_value, count_value, mask_duplicate_
 def checkbit(packedint, offset):
     """
     Check for a bit flag in a given int value.
-    
+
     Args:
         packedint: bit packed int
         offset: binary offset to check
@@ -17,7 +18,6 @@ def checkbit(packedint, offset):
         bool
     """
     bit = 1 << offset
-
     return (packedint & bit) > 0
 
 
@@ -25,9 +25,9 @@ def qabitval(packedint, proc_params):
     """
     Institute a hierarchy of qa values that may be flagged in the bitpacked
     value.
-    
+
     fill > cloud > shadow > snow > water > clear
-    
+
     Args:
         packedint: int value to bit check
         proc_params: dictionary of processing parameters
@@ -35,25 +35,18 @@ def qabitval(packedint, proc_params):
     Returns:
         offset value to use
     """
-    if checkbit(packedint, proc_params.QA_FILL):
-        return proc_params.QA_FILL
-    elif checkbit(packedint, proc_params.QA_CLOUD):
-        return proc_params.QA_CLOUD
-    elif checkbit(packedint, proc_params.QA_SHADOW):
-        return proc_params.QA_SHADOW
-    elif checkbit(packedint, proc_params.QA_SNOW):
-        return proc_params.QA_SNOW
-    elif checkbit(packedint, proc_params.QA_WATER):
-        return proc_params.QA_WATER
-    elif checkbit(packedint, proc_params.QA_CLEAR):
-        return proc_params.QA_CLEAR
-    # L8 Cirrus and Terrain Occlusion
-    elif (checkbit(packedint, proc_params.QA_CIRRUS1) &
-          checkbit(packedint, proc_params.QA_CIRRUS2)):
-        return proc_params.QA_CLEAR
-    elif checkbit(packedint, proc_params.QA_OCCLUSION):
-        return proc_params.QA_CLEAR
-
+    if checkbit(packedint, proc_params['QA_FILL']):
+        return proc_params['QA_FILL']
+    elif checkbit(packedint, proc_params['QA_CLOUD']):
+        return proc_params['QA_CLOUD']
+    elif checkbit(packedint, proc_params['QA_SHADOW']):
+        return proc_params['QA_SHADOW']
+    elif checkbit(packedint, proc_params['QA_SNOW']):
+        return proc_params['QA_SNOW']
+    elif checkbit(packedint, proc_params['QA_WATER']):
+        return proc_params['QA_WATER']
+    elif checkbit(packedint, proc_params['QA_CLEAR']):
+        return proc_params['QA_CLEAR']
     else:
         raise ValueError('Unsupported bitpacked QA value {}'.format(packedint))
 
@@ -69,8 +62,7 @@ def unpackqa(quality, proc_params):
     Returns:
         1-d ndarray
     """
-
-    return np.array([qabitval(q, proc_params) for q in quality])
+    return np_array([qabitval(i, proc_params) for i in quality])
 
 
 def count_clear_or_water(quality, clear, water):
@@ -261,9 +253,9 @@ def standard_procedure_filter(observations, quality, dates, proc_params):
     Returns:
         1-d boolean ndarray
     """
-    thermal_idx = proc_params.THERMAL_IDX
-    clear = proc_params.QA_CLEAR
-    water = proc_params.QA_WATER
+    thermal_idx = proc_params['THERMAL_IDX']
+    clear = proc_params['QA_CLEAR']
+    water = proc_params['QA_WATER']
 
     mask = ((mask_value(quality, water) | mask_value(quality, clear)) &
             filter_thermal_celsius(observations[thermal_idx]) &
@@ -293,10 +285,10 @@ def snow_procedure_filter(observations, quality, dates, proc_params):
     Returns:
         1-d boolean ndarray
     """
-    thermal_idx = proc_params.THERMAL_IDX
-    clear = proc_params.QA_CLEAR
-    water = proc_params.QA_WATER
-    snow = proc_params.QA_SNOW
+    thermal_idx = proc_params['THERMAL_IDX']
+    clear = proc_params['QA_CLEAR']
+    water = proc_params['QA_WATER']
+    snow = proc_params['QA_SNOW']
 
     mask = ((mask_value(quality, water) | mask_value(quality, clear)) &
             filter_thermal_celsius(observations[thermal_idx]) &
@@ -325,8 +317,8 @@ def insufficient_clear_filter(observations, quality, dates, proc_params):
     Returns:
         1-d boolean ndarray
     """
-    green_idx = proc_params.GREEN_IDX
-    filter_range = proc_params.MEDIAN_GREEN_FILTER
+    green_idx = proc_params['GREEN_IDX']
+    filter_range = proc_params['MEDIAN_GREEN_FILTER']
 
     standard_mask = standard_procedure_filter(observations, quality, dates, proc_params)
     green_mask = filter_median_green(observations[:, standard_mask][green_idx], filter_range)
